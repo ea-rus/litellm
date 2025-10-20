@@ -1,8 +1,4 @@
 import { Layout, Menu } from "antd";
-import Link from "next/link";
-import { List } from "postcss/lib/list";
-import { Text, Button } from "@tremor/react";
-import { useState } from "react";
 import {
   KeyOutlined,
   PlayCircleOutlined,
@@ -16,27 +12,14 @@ import {
   AppstoreOutlined,
   DatabaseOutlined,
   FileTextOutlined,
-  LineOutlined,
   LineChartOutlined,
   SafetyOutlined,
   ExperimentOutlined,
-  ThunderboltOutlined,
-  LockOutlined,
   ToolOutlined,
   TagsOutlined,
   BgColorsOutlined,
-  MenuFoldOutlined,
-  MenuUnfoldOutlined,
 } from "@ant-design/icons";
-import {
-  old_admin_roles,
-  v2_admin_role_names,
-  all_admin_roles,
-  rolesAllowedToSeeUsage,
-  rolesWithWriteAccess,
-  internalUserRoles,
-  isAdminRole,
-} from "../utils/roles";
+import { all_admin_roles, rolesWithWriteAccess, internalUserRoles, isAdminRole } from "../utils/roles";
 import UsageIndicator from "./usage_indicator";
 import { ConfigProvider } from "antd";
 const { Sider } = Layout;
@@ -206,6 +189,13 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
           page: "admin-panel",
           label: "Admin Settings",
           icon: <SettingOutlined style={{ fontSize: "18px" }} />,
+          roles: all_admin_roles,
+        },
+        {
+          key: "27",
+          page: "cost-tracking-settings",
+          label: "Cost Tracking",
+          icon: <BarChartOutlined style={{ fontSize: "18px" }} />,
           roles: all_admin_roles,
         },
         {

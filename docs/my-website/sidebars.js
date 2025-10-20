@@ -94,10 +94,10 @@ const sidebars = {
 
     {
       type: "category",
-      label: "LiteLLM Proxy Server",
+      label: "LiteLLM AI Gateway",
       link: {
         type: "generated-index",
-        title: "LiteLLM Proxy Server (LLM Gateway)",
+        title: "LiteLLM AI Gateway (LLM Proxy)",
         description: `OpenAI Proxy Server (LLM Gateway) to call 100+ LLMs in a unified interface & track spend, set budgets per virtual key/user`,
         slug: "/simple_proxy",
       },
@@ -187,14 +187,24 @@ const sidebars = {
         },
         {
           type: "category",
+          label: "Spend Tracking",
+          items: [
+            "proxy/cost_tracking",
+            "proxy/custom_pricing",
+            "proxy/billing",
+          ],
+        },
+        {
+          type: "category",
           label: "Budgets + Rate Limits",
           items: [
+            "proxy/users",
+            "proxy/team_budgets",
+            "proxy/tag_budgets",
             "proxy/customers",
             "proxy/dynamic_rate_limit",
             "proxy/rate_limit_tiers",
-            "proxy/team_budgets",
             "proxy/temporary_budget_increase",
-            "proxy/users"
           ],
         },
         "proxy/caching",
@@ -249,15 +259,6 @@ const sidebars = {
             "secret",
             "oidc"
           ]
-        },
-        {
-          type: "category",
-          label: "Spend Tracking",
-          items: [
-            "proxy/billing",
-            "proxy/cost_tracking",
-            "proxy/custom_pricing"
-          ],
         },
       ]
     },
@@ -346,6 +347,9 @@ const sidebars = {
           ]
         },
         "moderation",
+        "bedrock_invoke",
+        "bedrock_converse",
+        "ocr",
         {
           type: "category",
           label: "Pass-through Endpoints (Anthropic SDK, etc.)",
@@ -360,7 +364,14 @@ const sidebars = {
             "pass_through/langfuse",
             "pass_through/mistral",
             "pass_through/openai_passthrough",
-            "pass_through/vertex_ai",
+            {
+              type: "category",
+              label: "Vertex AI",
+              items: [
+                "pass_through/vertex_ai",
+                "pass_through/vertex_ai_live_websocket",
+              ]
+            },
             "pass_through/vllm",
             "proxy/pass_through"
           ]
@@ -423,6 +434,7 @@ const sidebars = {
           items: [
             "providers/vertex",
             "providers/vertex_partner",
+            "providers/vertex_self_deployed",
             "providers/vertex_image",
             "providers/vertex_batch",
           ]
@@ -534,6 +546,7 @@ const sidebars = {
         "providers/datarobot",
         "providers/ovhcloud",  
         "providers/wandb_inference",
+        "providers/cometapi",
       ],
     },
     {

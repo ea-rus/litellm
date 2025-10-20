@@ -33,9 +33,9 @@ from litellm.constants import (
     AIOHTTP_TTL_DNS_CACHE,
     BASE_MCP_ROUTE,
     DEFAULT_MAX_RECURSE_DEPTH,
-    DEFAULT_SLACK_ALERTING_THRESHOLD,
-    DEFAULT_SHARED_HEALTH_CHECK_TTL,
     DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
+    DEFAULT_SHARED_HEALTH_CHECK_TTL,
+    DEFAULT_SLACK_ALERTING_THRESHOLD,
     LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
 )
@@ -253,15 +253,16 @@ from litellm.proxy.management_endpoints.callback_management_endpoints import (
     router as callback_management_endpoints_router,
 )
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.proxy.management_endpoints.cost_tracking_settings import (
+    router as cost_tracking_settings_router,
+)
 from litellm.proxy.management_endpoints.customer_endpoints import (
     router as customer_router,
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
-from litellm.proxy.management_endpoints.internal_user_endpoints import (
-    user_update,
-)
+from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
     duration_in_seconds,
@@ -305,12 +306,11 @@ from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
 )
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
+from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
-from litellm.proxy.openai_files_endpoints.files_endpoints import (
-    set_files_config,
-)
+from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_config
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
 )
@@ -473,9 +473,9 @@ except ImportError:
 server_root_path = os.getenv("SERVER_ROOT_PATH", "")
 _license_check = LicenseCheck()
 premium_user: bool = _license_check.is_premium()
-premium_user_data: Optional["EnterpriseLicenseData"] = (
-    _license_check.airgapped_license_data
-)
+premium_user_data: Optional[
+    "EnterpriseLicenseData"
+] = _license_check.airgapped_license_data
 global_max_parallel_request_retries_env: Optional[str] = os.getenv(
     "LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES"
 )
@@ -580,7 +580,7 @@ async def _initialize_shared_aiohttp_session():
             ttl_dns_cache=AIOHTTP_TTL_DNS_CACHE,
             enable_cleanup_closed=True,
         )
-        
+
         session = ClientSession(connector=connector)
         verbose_proxy_logger.info(
             f"SESSION REUSE: Created shared aiohttp session for connection pooling (ID: {id(session)})"
@@ -723,7 +723,7 @@ async def proxy_startup_event(app: FastAPI):
             verbose_proxy_logger.info("SESSION REUSE: Closed shared aiohttp session")
         except Exception as e:
             verbose_proxy_logger.error(f"Error closing shared aiohttp session: {e}")
-    
+
     await proxy_shutdown_event()
 
 
@@ -995,13 +995,16 @@ experimental = False
 llm_router: Optional[Router] = None
 llm_model_list: Optional[list] = None
 general_settings: dict = {}
+config_passthrough_endpoints: Optional[List[Dict[str, Any]]] = None
 callback_settings: dict = {}
 log_file = "api_log.json"
 worker_config = None
 master_key: Optional[str] = None
 otel_logging = False
 prisma_client: Optional[PrismaClient] = None
-shared_aiohttp_session: Optional["ClientSession"] = None  # Global shared session for connection reuse
+shared_aiohttp_session: Optional[
+    "ClientSession"
+] = None  # Global shared session for connection reuse
 user_api_key_cache = DualCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
@@ -1009,9 +1012,9 @@ model_max_budget_limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(
     dual_cache=user_api_key_cache
 )
 litellm.logging_callback_manager.add_litellm_callback(model_max_budget_limiter)
-redis_usage_cache: Optional[RedisCache] = (
-    None  # redis cache used for tracking spend, tpm/rpm limits
-)
+redis_usage_cache: Optional[
+    RedisCache
+] = None  # redis cache used for tracking spend, tpm/rpm limits
 user_custom_auth = None
 user_custom_key_generate = None
 user_custom_sso = None
@@ -1157,6 +1160,7 @@ async def update_cache(  # noqa: PLR0915
     team_id: Optional[str],
     response_cost: Optional[float],
     parent_otel_span: Optional[Span],  # type: ignore
+    tags: Optional[List[str]] = None,
 ):
     """
     Use this to update the cache with new user spend.
@@ -1343,9 +1347,9 @@ async def update_cache(  # noqa: PLR0915
         _id = "team_id:{}".format(team_id)
         try:
             # Fetch the existing cost for the given user
-            existing_spend_obj: Optional[LiteLLM_TeamTable] = (
-                await user_api_key_cache.async_get_cache(key=_id)
-            )
+            existing_spend_obj: Optional[
+                LiteLLM_TeamTable
+            ] = await user_api_key_cache.async_get_cache(key=_id)
             if existing_spend_obj is None:
                 # do nothing if team not in api key cache
                 return
@@ -1377,6 +1381,52 @@ async def update_cache(  # noqa: PLR0915
                 f"An error occurred updating end user cache: {str(e)}"
             )
 
+    ### UPDATE TAG SPEND ###
+    async def _update_tag_cache():
+        """
+        Update the tag cache with the new spend.
+        """
+        if tags is None or response_cost is None:
+            return
+
+        try:
+            for tag_name in tags:
+                if not tag_name or not isinstance(tag_name, str):
+                    continue
+
+                cache_key = f"tag:{tag_name}"
+                # Fetch the existing tag object from cache
+                existing_tag_obj = await user_api_key_cache.async_get_cache(
+                    key=cache_key
+                )
+                if existing_tag_obj is None:
+                    # do nothing if tag not in api key cache
+                    continue
+
+                verbose_proxy_logger.debug(
+                    f"_update_tag_cache: existing spend for tag={tag_name}: {existing_tag_obj}; response_cost: {response_cost}"
+                )
+
+                if isinstance(existing_tag_obj, dict):
+                    existing_spend = existing_tag_obj.get("spend", 0) or 0
+                else:
+                    existing_spend = getattr(existing_tag_obj, "spend", 0) or 0
+
+                # Calculate the new cost by adding the existing cost and response_cost
+                new_spend = existing_spend + response_cost
+
+                # Update the spend column for the given tag
+                if isinstance(existing_tag_obj, dict):
+                    existing_tag_obj["spend"] = new_spend
+                    values_to_update_in_cache.append((cache_key, existing_tag_obj))
+                else:
+                    existing_tag_obj.spend = new_spend
+                    values_to_update_in_cache.append((cache_key, existing_tag_obj))
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                f"An error occurred updating tag cache: {str(e)}"
+            )
+
     if token is not None and response_cost is not None:
         await _update_key_cache(token=token, response_cost=response_cost)
 
@@ -1388,6 +1438,9 @@ async def update_cache(  # noqa: PLR0915
 
     if team_id is not None:
         await _update_team_cache()
+
+    if tags is not None:
+        await _update_tag_cache()
 
     asyncio.create_task(
         user_api_key_cache.async_set_cache_pipeline(
@@ -1431,7 +1484,10 @@ async def _run_background_health_check():
     # Initialize shared health check manager if Redis is available and feature is enabled
     shared_health_manager = None
     if use_shared_health_check and redis_usage_cache is not None:
-        from litellm.proxy.health_check_utils.shared_health_check_manager import SharedHealthCheckManager
+        from litellm.proxy.health_check_utils.shared_health_check_manager import (
+            SharedHealthCheckManager,
+        )
+
         shared_health_manager = SharedHealthCheckManager(
             redis_cache=redis_usage_cache,
             health_check_ttl=DEFAULT_SHARED_HEALTH_CHECK_TTL,
@@ -1451,14 +1507,23 @@ async def _run_background_health_check():
         ]
 
         # Use shared health check if available, otherwise fall back to direct health check
+        # Convert health_check_details to bool for perform_shared_health_check (defaults to True if None)
+        details_bool = (
+            health_check_details if health_check_details is not None else True
+        )
+
         if shared_health_manager is not None:
             try:
-                healthy_endpoints, unhealthy_endpoints = await shared_health_manager.perform_shared_health_check(
-                    model_list=_llm_model_list, details=health_check_details
+                (
+                    healthy_endpoints,
+                    unhealthy_endpoints,
+                ) = await shared_health_manager.perform_shared_health_check(
+                    model_list=_llm_model_list, details=details_bool
                 )
             except Exception as e:
                 verbose_proxy_logger.error(
-                    "Error in shared health check, falling back to direct health check: %s", str(e)
+                    "Error in shared health check, falling back to direct health check: %s",
+                    str(e),
                 )
                 healthy_endpoints, unhealthy_endpoints = await perform_health_check(
                     model_list=_llm_model_list, details=health_check_details
@@ -1600,8 +1665,28 @@ class ProxyConfig:
         ):
             # if using - db for config - models are in ModelTable
 
-            new_config.pop("model_list", None)
-            await prisma_client.insert_data(data=new_config, table_name="config")
+            # Make a copy to avoid mutating the original config
+            config_to_save = new_config.copy()
+
+            # SECURITY: Always encrypt environment_variables before DB write
+            if (
+                "environment_variables" in config_to_save
+                and config_to_save["environment_variables"]
+            ):
+
+                # decrypt the environment_variables - in case a caller function has already encrypted the environment_variables
+                decrypted_env_vars = self._decrypt_and_set_db_env_variables(
+                    environment_variables=config_to_save["environment_variables"],
+                    return_original_value=True,
+                )
+
+                # encrypt the environment_variables,
+                config_to_save["environment_variables"] = self._encrypt_env_variables(
+                    environment_variables=decrypted_env_vars
+                )
+
+            config_to_save.pop("model_list", None)
+            await prisma_client.insert_data(data=config_to_save, table_name="config")
         else:
             # Save the updated config - if user is not using a dB
             ## YAML
@@ -1826,7 +1911,7 @@ class ProxyConfig:
         """
         Load config values into proxy global state
         """
-        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, use_shared_health_check, health_check_interval, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, callback_settings, proxy_batch_polling_interval
+        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, use_shared_health_check, health_check_interval, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, callback_settings, proxy_batch_polling_interval, config_passthrough_endpoints
 
         config: dict = await self.get_config(config_file_path=config_file_path)
 
@@ -2181,9 +2266,13 @@ class ProxyConfig:
 
             ## pass through endpoints
             if general_settings.get("pass_through_endpoints", None) is not None:
+                config_passthrough_endpoints = general_settings[
+                    "pass_through_endpoints"
+                ]
                 await initialize_pass_through_endpoints(
                     pass_through_endpoints=general_settings["pass_through_endpoints"]
                 )
+
             ## ADMIN UI ACCESS ##
             ui_access_mode = general_settings.get(
                 "ui_access_mode", "all"
@@ -2774,7 +2863,9 @@ class ProxyConfig:
             encrypted_env_vars[k] = encrypted_value
         return encrypted_env_vars
 
-    def _decrypt_and_set_db_env_variables(self, environment_variables: dict) -> dict:
+    def _decrypt_and_set_db_env_variables(
+        self, environment_variables: dict, return_original_value: bool = False
+    ) -> dict:
         """
         Decrypts a dictionary of environment variables and then sets them in the environment
 
@@ -2785,7 +2876,9 @@ class ProxyConfig:
         decrypted_env_vars = {}
         for k, v in environment_variables.items():
             try:
-                decrypted_value = decrypt_value_helper(value=v, key=k)
+                decrypted_value = decrypt_value_helper(
+                    value=v, key=k, return_original_value=return_original_value
+                )
                 if decrypted_value is not None:
                     os.environ[k] = decrypted_value
                     decrypted_env_vars[k] = decrypted_value
@@ -2983,7 +3076,9 @@ class ProxyConfig:
                         d[k] = v
 
         if param_name == "environment_variables":
-            decrypted_env_vars = self._decrypt_and_set_db_env_variables(db_param_value)
+            decrypted_env_vars = self._decrypt_and_set_db_env_variables(
+                db_param_value, return_original_value=True
+            )
             current_config.setdefault("environment_variables", {}).update(
                 decrypted_env_vars
             )
@@ -3002,7 +3097,9 @@ class ProxyConfig:
             return current_config
 
         # For dictionary values, update only non-none values
-        if isinstance(current_config[param_name], dict) and isinstance(db_param_value, dict):
+        if isinstance(current_config[param_name], dict) and isinstance(
+            db_param_value, dict
+        ):
             _deep_merge_dicts(current_config[param_name], db_param_value)
         else:
             # Non-dict or mismatched types: DB value replaces config (unchanged behavior)
@@ -3296,10 +3393,10 @@ class ProxyConfig:
         )
 
         try:
-            guardrails_in_db: List[Guardrail] = (
-                await GuardrailRegistry.get_all_guardrails_from_db(
-                    prisma_client=prisma_client
-                )
+            guardrails_in_db: List[
+                Guardrail
+            ] = await GuardrailRegistry.get_all_guardrails_from_db(
+                prisma_client=prisma_client
             )
             verbose_proxy_logger.debug(
                 "guardrails from the DB %s", str(guardrails_in_db)
@@ -3529,9 +3626,9 @@ async def initialize(  # noqa: PLR0915
         user_api_base = api_base
         dynamic_config[user_model]["api_base"] = api_base
     if api_version:
-        os.environ["AZURE_API_VERSION"] = (
-            api_version  # set this for azure - litellm can read this from the env
-        )
+        os.environ[
+            "AZURE_API_VERSION"
+        ] = api_version  # set this for azure - litellm can read this from the env
     if max_tokens:  # model-specific param
         dynamic_config[user_model]["max_tokens"] = max_tokens
     if temperature:  # model-specific param
@@ -6167,6 +6264,7 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
             pass
     if deployment is not None:
         litellm_model_name = deployment.get("litellm_params", {}).get("model")
+        model_info = deployment.get("model_info", {})
         load_credentials_from_list(deployment.get("litellm_params", {}))
         # remove the custom_llm_provider_prefix in the litellm_model_name
         if "/" in litellm_model_name:
@@ -8894,9 +8992,9 @@ async def get_config_list(
                             hasattr(sub_field_info, "description")
                             and sub_field_info.description is not None
                         ):
-                            nested_fields[idx].field_description = (
-                                sub_field_info.description
-                            )
+                            nested_fields[
+                                idx
+                            ].field_description = sub_field_info.description
                         idx += 1
 
                     _stored_in_db = None
@@ -9701,6 +9799,7 @@ app.include_router(response_router)
 app.include_router(batches_router)
 app.include_router(public_endpoints_router)
 app.include_router(rerank_router)
+app.include_router(ocr_router)
 app.include_router(image_router)
 app.include_router(fine_tuning_router)
 app.include_router(vector_store_router)
@@ -9733,6 +9832,7 @@ app.include_router(team_callback_router)
 app.include_router(budget_management_router)
 app.include_router(model_management_router)
 app.include_router(tag_management_router)
+app.include_router(cost_tracking_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
